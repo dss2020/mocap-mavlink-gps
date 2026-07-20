@@ -1,6 +1,7 @@
 import unittest
 import math
 from gps_bridge import map_axis
+from simulate_vrpn_server import map_local_to_vrpn
 
 class TestGPSBridge(unittest.TestCase):
     def test_coordinate_mapping(self):
@@ -62,6 +63,19 @@ class TestGPSBridge(unittest.TestCase):
         self.assertEqual(expected_vn, 5.0)
         self.assertEqual(expected_ve, -2.0)
         self.assertEqual(expected_vd, 1.0)
+
+    def test_local_to_vrpn_mapping(self):
+        mapping = {
+            "east": "x",
+            "north": "-z",
+            "up": "y"
+        }
+        # Given: east=10.0, north=20.0, up=1.5
+        # Expected VRPN: pos_x = 10.0, pos_y = 1.5, pos_z = -20.0
+        px, py, pz = map_local_to_vrpn(10.0, 20.0, 1.5, mapping)
+        self.assertEqual(px, 10.0)
+        self.assertEqual(py, 1.5)
+        self.assertEqual(pz, -20.0)
 
 if __name__ == "__main__":
     unittest.main()
