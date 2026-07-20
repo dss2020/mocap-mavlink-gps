@@ -1,12 +1,12 @@
 {
   "vrpn": {
-    "host": "192.168.1.100",
+    "host": "127.0.0.1",
     "port": 3883,
     "tracker_name": "Rigidbody"
   },
   "mavlink": {
-    "connection_type": "udp",
-    "port": "127.0.0.1:14550",
+    "connection_type": "serial",
+    "port": "auto",
     "baudrate": 115200,
     "system_id": 1,
     "component_id": 220
@@ -18,8 +18,8 @@
     "update_rate_hz": 10
   },
   "coordinate_mapping": {
-    "east": "x",
-    "north": "-z",
-    "up": "y"
+    "east": "-x",
+    "north": "-y",
+    "up": "z"
   }
 }

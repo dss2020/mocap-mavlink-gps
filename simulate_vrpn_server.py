@@ -3,12 +3,46 @@ import struct
 import time
 import math
 import logging
+import json
+import sys
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] MockServer: %(message)s")
 logger = logging.getLogger("MockServer")
 
 VRPN_CONNECTION_SENDER_DESCRIPTION = -1
 VRPN_CONNECTION_TYPE_DESCRIPTION = -2
+
+def load_config(config_path="config.json"):
+    """Loads configuration parameters from JSON file."""
+    try:
+        with open(config_path, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warning(f"Could not load config file {config_path}: {e}. Using default coordinate mapping.")
+        return {}
+
+def map_local_to_vrpn(east, north, up, mapping):
+    """
+    Translates local coordinate frames (East, North, Up) back into VRPN (x, y, z) 
+    coordinates based on the convention mapping specified in config.json.
+    """
+    pos = {"x": 0.0, "y": 0.0, "z": 0.0}
+    
+    def assign_axis(mapping_key, val):
+        clean_key = mapping_key.strip().lower()
+        sign = 1.0
+        if clean_key.startswith("-"):
+            sign = -1.0
+            clean_key = clean_key[1:]
+        if clean_key in pos:
+            pos[clean_key] = sign * val
+
+    assign_axis(mapping.get("east", "x"), east)
+    assign_axis(mapping.get("north", "-z"), north)
+    assign_axis(mapping.get("up", "y"), up)
+    
+    return pos["x"], pos["y"], pos["z"]
+
 
 def pad_payload(payload):
     """Pads payload to satisfy VRPN 8-byte alignment rules."""
@@ -61,20 +95,25 @@ def handle_client(client_sock):
         logger.info("Sent VRPN registration descriptors. Starting tracking stream...")
         
         # 4. Stream circular movement reports at 20Hz
+        config = load_config()
+        mapping = config.get("coordinate_mapping", {})
+        logger.info(f"Loaded coordinate mapping for simulation: {mapping}")
+
         angle = 0.0
-        radius = 3.0       # 3 meters radius
-        omega = 0.25       # Angular velocity
+        radius = 10.0       # 10 meters radius
+        omega = 0.5       # Angular velocity
         loop_interval = 0.05 # 20 Hz
         
         while True:
             t = time.time()
             
-            # Simulated circular trajectory
-            # Motive convention: X=East, Y=Up, Z=South.
-            # circular motion in X-Z horizontal plane, with Y oscillation.
-            pos_x = radius * math.cos(angle)
-            pos_z = radius * math.sin(angle)
-            pos_y = 1.5 + 0.5 * math.sin(t) # Hovering between 1.0m and 2.0m height
+            # Generate circular trajectory in local frame (East/North plane, with Up hovering height)
+            east = radius * math.cos(angle)
+            north = radius * math.sin(angle)
+            up = 1.5 + 0.5 * math.sin(t) # Hovering between 1.0m and 2.0m height
+            
+            # Map East, North, Up back to VRPN (x, y, z) using config.json conventions
+            pos_x, pos_y, pos_z = map_local_to_vrpn(east, north, up, mapping)
             
             # Simulated orientation (no rotation, identity quaternion)
             qx, qy, qz, qw = 0.0, 0.0, 0.0, 1.0
