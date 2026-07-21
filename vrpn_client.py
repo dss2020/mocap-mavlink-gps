@@ -40,8 +40,8 @@ class VRPNClient:
         self._socket.connect((self.host, self.port))
         
         # VRPN Version Handshake
-        # 1. Read server cookie (32 bytes)
-        server_cookie = self._read_exact(32)
+        # 1. Read server cookie (24 bytes)
+        server_cookie = self._read_exact(24)
         if not server_cookie:
             raise ConnectionError("Server disconnected immediately without cookie.")
         
@@ -107,50 +107,53 @@ class VRPNClient:
 
             try:
                 # Wire format:
-                #   payload_len (uint32) - 4 bytes
+                #   msg_len (uint32) - 4 bytes (total message length: header + payload)
                 #   tv_sec (uint32) - 4 bytes
                 #   tv_usec (uint32) - 4 bytes
                 #   sender_id (int32) - 4 bytes
                 #   type_id (int32) - 4 bytes
                 #   sequence_number (uint32) - 4 bytes
-                payload_len, tv_sec, tv_usec, sender_id, type_id, seq = struct.unpack(">IIIiiI", header)
-                logger.debug(f"Unpacked header: payload_len={payload_len}, tv_sec={tv_sec}, tv_usec={tv_usec}, sender_id={sender_id}, type_id={type_id}, seq={seq}")
+                msg_len, tv_sec, tv_usec, sender_id, type_id, seq = struct.unpack(">IIIiiI", header)
+                payload_len = msg_len - 24 if msg_len >= 24 else 0
+                logger.debug(f"Unpacked header: msg_len={msg_len}, payload_len={payload_len}, tv_sec={tv_sec}, tv_usec={tv_usec}, sender_id={sender_id}, type_id={type_id}, seq={seq}")
             except Exception as e:
                 logger.error(f"Failed to unpack message header: {e}")
                 self._connected = False
                 continue
 
-            # Read payload
-            logger.debug(f"Reading payload of length {payload_len}...")
-            payload = self._read_exact(payload_len)
-            if payload is None:
+            # Read payload (padded to 8-byte alignment)
+            padded_len = (payload_len + 7) // 8 * 8
+            logger.debug(f"Reading payload of length {payload_len} (padded to {padded_len})...")
+            padded_payload = self._read_exact(padded_len)
+            if padded_payload is None:
                 logger.warning("VRPN Connection closed during payload read.")
                 self._connected = False
                 continue
+            payload = padded_payload[:payload_len]
 
             timestamp = tv_sec + (tv_usec / 1e6)
 
             # Handle System Messages
             if type_id == self.VRPN_CONNECTION_SENDER_DESCRIPTION:
                 try:
-                    desc_sender_id, = struct.unpack(">i", payload[:4])
-                    name = payload[4:].split(b"\x00")[0].decode("utf-8", errors="replace")
-                    self.senders[desc_sender_id] = name
-                    logger.info(f"Registered Sender ID {desc_sender_id} -> '{name}'")
+                    name_len, = struct.unpack(">i", payload[:4])
+                    name = payload[4:4+name_len].split(b"\x00")[0].decode("utf-8", errors="replace")
+                    self.senders[sender_id] = name
+                    logger.info(f"Registered Sender ID {sender_id} -> '{name}'")
                 except Exception as e:
                     logger.error(f"Error parsing sender description: {e}")
 
             elif type_id == self.VRPN_CONNECTION_TYPE_DESCRIPTION:
                 try:
-                    desc_type_id, = struct.unpack(">i", payload[:4])
-                    name = payload[4:].split(b"\x00")[0].decode("utf-8", errors="replace")
-                    self.types[desc_type_id] = name
-                    logger.info(f"Registered Type ID {desc_type_id} -> '{name}'")
+                    name_len, = struct.unpack(">i", payload[:4])
+                    name = payload[4:4+name_len].split(b"\x00")[0].decode("utf-8", errors="replace")
+                    self.types[sender_id] = name
+                    logger.info(f"Registered Type ID {sender_id} -> '{name}'")
                 except Exception as e:
                     logger.error(f"Error parsing type description: {e}")
 
             # Handle Tracker Messages
-            elif self.types.get(type_id) == "vrpn_Tracker":
+            elif self.types.get(type_id) in ["vrpn_Tracker", "vrpn_Tracker Pos_Quat"]:
                 sender_name = self.senders.get(sender_id)
                 if sender_name == self.tracker_name:
                     if len(payload) >= 64:
