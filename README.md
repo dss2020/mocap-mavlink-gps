@@ -19,7 +19,7 @@ This Python application acts as a geodetic bridge, translating motion capture (m
 ## 📁 Project Structure
 
 - `gps_bridge.py`: Main entry point. Handles setup, flat-Earth geodetic projection, velocity estimation, rate-limiting, and serial prompt logic.
-- `vrpn_client.py`: Socket client implementing the VRPN TCP protocol parsing (32-byte version cookie exchange and dynamic descriptor mappings).
+- `vrpn_client.py`: Socket client implementing the VRPN TCP protocol parsing (24-byte version cookie exchange and dynamic descriptor mappings).
 - `config.json`: Master configuration file.
 - `simulate_vrpn_server.py`: Utility that mocks a VRPN server streaming 3D circular coordinates at 20Hz.
 - `test_bridge.py`: Unit tests validating geodetic translations, velocity calculations, and axis mappings.

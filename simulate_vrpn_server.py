@@ -52,31 +52,32 @@ def pad_payload(payload):
 def pack_msg(type_id, sender_id, payload):
     """Packs message payload with a 24-byte VRPN TCP header."""
     payload_len = len(payload)
+    total_len = payload_len + 24
     t = time.time()
     tv_sec = int(t)
     tv_usec = int((t - tv_sec) * 1e6)
     seq = 0
-    header = struct.pack(">IIIiiI", payload_len, tv_sec, tv_usec, sender_id, type_id, seq)
+    header = struct.pack(">IIIiiI", total_len, tv_sec, tv_usec, sender_id, type_id, seq)
     return header + payload
 
-def create_description_payload(desc_id, name):
-    """Creates VRPN description payload containing description ID and name."""
+def create_description_payload(name):
+    """Creates VRPN description payload containing name length and name."""
     name_bytes = name.encode("utf-8") + b"\x00"
-    payload = struct.pack(">i", desc_id) + name_bytes
+    payload = struct.pack(">i", len(name_bytes)) + name_bytes
     return pad_payload(payload)
 
 def handle_client(client_sock):
     """Handles VRPN client session."""
     try:
         client_sock.settimeout(5.0)
-        # 1. Send Server version cookie (32 bytes)
-        cookie = b"vrpn-connection-cookie v07.36"
-        cookie = cookie + (b"\x00" * (32 - len(cookie)))
+        # 1. Send Server version cookie (24 bytes)
+        cookie = b"vrpn: ver. 07.36  0"
+        cookie = cookie + (b"\x00" * (24 - len(cookie)))
         client_sock.sendall(cookie)
         
-        # 2. Read Client version cookie (32 bytes)
-        client_cookie = client_sock.recv(32)
-        if len(client_cookie) < 32:
+        # 2. Read Client version cookie (24 bytes)
+        client_cookie = client_sock.recv(24)
+        if len(client_cookie) < 24:
             logger.warning("Client disconnected during handshake.")
             return
             
@@ -85,11 +86,11 @@ def handle_client(client_sock):
         
         # 3. Send system registration messages
         # Register Type ID 0 -> "vrpn_Tracker"
-        type_payload = create_description_payload(0, "vrpn_Tracker")
+        type_payload = create_description_payload("vrpn_Tracker")
         client_sock.sendall(pack_msg(VRPN_CONNECTION_TYPE_DESCRIPTION, 0, type_payload))
         
         # Register Sender ID 0 -> "Rigidbody"
-        sender_payload = create_description_payload(0, "Rigidbody")
+        sender_payload = create_description_payload("Rigidbody")
         client_sock.sendall(pack_msg(VRPN_CONNECTION_SENDER_DESCRIPTION, 0, sender_payload))
         
         logger.info("Sent VRPN registration descriptors. Starting tracking stream...")
