@@ -2,6 +2,7 @@ import unittest
 import math
 from gps_bridge import map_axis
 from simulate_vrpn_server import map_local_to_vrpn
+from velocity_filter import VelocityFilter
 
 class TestGPSBridge(unittest.TestCase):
     def test_coordinate_mapping(self):
@@ -77,5 +78,45 @@ class TestGPSBridge(unittest.TestCase):
         self.assertEqual(py, 1.5)
         self.assertEqual(pz, -20.0)
 
+    def test_velocity_filter_spike_rejection(self):
+        vf = VelocityFilter(window_duration_s=0.2, ema_alpha=0.3, max_dt_s=0.5)
+        
+        # Sample sequence around steady velocity of 1.0 m/s with a 100.0 m/s spike in the middle
+        # t = 0.0, v = 1.0
+        # t = 0.05, v = 1.0
+        # t = 0.10, v = 100.0 (SPIKE)
+        # t = 0.15, v = 1.0
+        # t = 0.20, v = 1.0
+        vn1, _, _ = vf.update(0.00, 1.0, 0.0, 0.0)
+        vn2, _, _ = vf.update(0.05, 1.0, 0.0, 0.0)
+        vn3, _, _ = vf.update(0.10, 100.0, 0.0, 0.0)  # Spike
+        vn4, _, _ = vf.update(0.15, 1.0, 0.0, 0.0)
+        vn5, _, _ = vf.update(0.20, 1.0, 0.0, 0.0)
+
+        # Median filter will evaluate median([1.0, 1.0, 100.0, 1.0]) = 1.0
+        # Spike of 100.0 is successfully suppressed, output velocity should remain near 1.0 (far from 100.0)
+        self.assertLess(vn3, 35.0)  # Unfiltered would be ~100 or huge, median keeps it around 1.0
+        self.assertAlmostEqual(vn5, 1.0, delta=0.2)
+
+    def test_velocity_filter_gap_reset(self):
+        vf = VelocityFilter(window_duration_s=0.2, ema_alpha=0.5, max_dt_s=0.5)
+        vf.update(0.0, 10.0, 10.0, 10.0)
+        
+        # Jump ahead in time > max_dt_s (e.g. 1.0s gap)
+        vn, ve, vd = vf.update(1.0, 2.0, 2.0, 2.0)
+        # Since gap > max_dt_s, filter should reset and adopt new value 2.0 directly
+        self.assertEqual(vn, 2.0)
+        self.assertEqual(ve, 2.0)
+        self.assertEqual(vd, 2.0)
+
+    def test_velocity_filter_clamping(self):
+        vf = VelocityFilter(window_duration_s=0.2, ema_alpha=1.0, max_velocity_ms=10.0)
+        # Pass velocity vector (15.0, 0.0, 0.0) exceeding 10.0 max speed
+        vn, ve, vd = vf.update(0.0, 15.0, 0.0, 0.0)
+        self.assertAlmostEqual(vn, 10.0)
+        self.assertAlmostEqual(ve, 0.0)
+        self.assertAlmostEqual(vd, 0.0)
+
 if __name__ == "__main__":
     unittest.main()
+
