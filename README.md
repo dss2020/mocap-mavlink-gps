@@ -28,54 +28,73 @@ This Python application acts as a geodetic bridge, translating motion capture (m
 
 ## ⚙️ Configuration (`config.json`)
 
-Configure your VRPN host, MAVLink connections, and origin coordinates in `config.json`:
+Configure your VRPN host, MAVLink connections, origin coordinates, and message transmission parameters in `config.json`:
 
 ```json
 {
   "vrpn": {
     "host": "192.168.1.100",
     "port": 3883,
-    "tracker_name": "Rigidbody"
+    "tracker_name": "ndpmonoco"
   },
   "mavlink": {
-    "connection_type": "udp",
-    "port": "127.0.0.1:14550",
+    "connection_type": "serial",
+    "port": "auto",
     "baudrate": 115200,
     "system_id": 1,
-    "component_id": 220
+    "component_id": 220,
+    "message_type": "BOTH"
   },
   "gps": {
-    "origin_lat": 1.342859,
-    "origin_lon": 103.966484,
+    "origin_lat": 1.341575,
+    "origin_lon": 103.964866,
     "origin_alt": 10.0,
     "update_rate_hz": 10
   },
+  "mocap": {
+    "update_rate_hz": 20
+  },
   "coordinate_mapping": {
-    "east": "x",
-    "north": "-z",
-    "up": "y"
+    "east": "-x",
+    "north": "-y",
+    "up": "z"
+  },
+  "velocity_filter": {
+    "enabled": true,
+    "window_duration_s": 0.5,
+    "ema_alpha": 0.5,
+    "max_dt_s": 0.5,
+    "max_velocity_ms": 15.0
   }
 }
 ```
 
-### Configuration Options:
-- **VRPN**:
-  - `host`: The IP address of the VRPN server (e.g. `192.168.1.100`).
-  - `port`: Port number (`3883` is the standard VRPN port).
-  - `tracker_name`: The name of the tracked rigid body in your mocap software.
-- **MAVLink**:
-  - `connection_type`: `"udp"` or `"serial"`.
-  - `port`: UDP endpoint (e.g. `127.0.0.1:14550`) or serial port path. Use `"prompt"` or `"auto"` to trigger serial port discovery and user prompts.
-  - `baudrate`: Connection baudrate (default `115200` for serial).
-  - `system_id`: MAVLink System ID of the bridge (default `1`).
-  - `component_id`: MAVLink Component ID of the bridge (default `220` / `MAV_COMP_ID_GPS`).
-- **GPS**:
-  - `origin_lat`: Origin Latitude (default `1.342859`).
-  - `origin_lon`: Origin Longitude (default `103.966484`).
-  - `origin_alt`: Origin Altitude in meters (default `10.0`).
-  - `update_rate_hz`: Frequency at which GPS_INPUT messages are sent (default `10`).
-- **Coordinate Mapping**:
-  - Defines which local coordinates represent the East, North, and Up axes. Prepend a minus sign (`-`) to invert the direction of an axis.
+### 📋 Field Descriptions & Available Options
+
+| Section | Parameter | Type | Description | Available Options / Example Values |
+| :--- | :--- | :--- | :--- | :--- |
+| **`vrpn`** | `host` | `string` | IP address or hostname of the VRPN server. | e.g. `"192.168.1.100"`, `"127.0.0.1"` |
+| | `port` | `integer` | TCP port of the VRPN server. | Default `3883` |
+| | `tracker_name` | `string` | Rigid body name defined in MoCap software (OptiTrack/Vicon/PhaseSpace). | e.g. `"Rigidbody"`, `"ndpmonoco"` |
+| **`mavlink`** | `connection_type` | `string` | Transport protocol for MAVLink telemetry. | `"udp"`, `"serial"` |
+| | `port` | `string` | UDP endpoint or serial port device path. | UDP: `"127.0.0.1:14550"`, `"udpin:0.0.0.0:14550"`<br>Serial: `"/dev/ttyUSB0"`, `"COM3"`, or `"auto"` / `"prompt"` for interactive detection |
+| | `baudrate` | `integer` | Baud rate for serial connections. | e.g. `57600`, `115200`, `921600` |
+| | `system_id` | `integer` | MAVLink System ID of the bridge node. | `1` to `255` (default `1`) |
+| | `component_id` | `integer` | MAVLink Component ID of the bridge node. | `1` to `255` (default `220` for `MAV_COMP_ID_GPS`) |
+| | `message_type` | `string` | MAVLink message output mode. | `"ATT_POS_MOCAP"` (raw mocap pose), `"GPS_INPUT"` (simulated GPS), `"BOTH"` (send both) |
+| **`gps`** | `origin_lat` | `float` | WGS-84 reference origin latitude in degrees. | `-90.0` to `90.0` (default `1.341575`) |
+| | `origin_lon` | `float` | WGS-84 reference origin longitude in degrees. | `-180.0` to `180.0` (default `103.964866`) |
+| | `origin_alt` | `float` | Reference origin altitude in meters above MSL. | e.g. `10.0` |
+| | `update_rate_hz` | `number` | Broadcast frequency for `GPS_INPUT` messages (Hz). | Positive number (default `10`) |
+| **`mocap`** | `update_rate_hz` | `number` | Broadcast frequency for `ATT_POS_MOCAP` messages (Hz). | Positive number (default `20`) |
+| **`coordinate_mapping`** | `east` | `string` | VRPN axis mapping to local East direction. | `"x"`, `"-x"`, `"y"`, `"-y"`, `"z"`, `"-z"` |
+| | `north` | `string` | VRPN axis mapping to local North direction. | `"x"`, `"-x"`, `"y"`, `"-y"`, `"z"`, `"-z"` |
+| | `up` | `string` | VRPN axis mapping to local Up direction. | `"x"`, `"-x"`, `"y"`, `"-y"`, `"z"`, `"-z"` |
+| **`velocity_filter`** | `enabled` | `boolean` | Enable numerical velocity filtering & spike rejection. | `true`, `false` |
+| | `window_duration_s` | `float` | Moving median filter window duration (seconds). | e.g. `0.1` to `1.0` (default `0.5`) |
+| | `ema_alpha` | `float` | Exponential Moving Average (EMA) smoothing coefficient. | `0.0` to `1.0` (default `0.5`) |
+| | `max_dt_s` | `float` | Maximum delta time gap before filter state reset. | Positive float (default `0.5`) |
+| | `max_velocity_ms` | `float` | Velocity magnitude threshold for outlier clamping (m/s). | Positive float (default `15.0`) |
 
 ---
 
