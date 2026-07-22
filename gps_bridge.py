@@ -6,6 +6,7 @@ import logging
 from pymavlink import mavutil
 import serial.tools.list_ports
 from vrpn_client import VRPNClient
+from velocity_filter import VelocityFilter
 
 # Configure Logging
 logging.basicConfig(
@@ -75,6 +76,16 @@ def main():
     mav_conf = config.get("mavlink", {})
     gps_conf = config.get("gps", {})
     axis_conf = config.get("coordinate_mapping", {})
+    filter_conf = config.get("velocity_filter", {})
+    
+    # Setup Velocity Filter
+    vel_filter = VelocityFilter(
+        window_duration_s=filter_conf.get("window_duration_s", 0.2),
+        ema_alpha=filter_conf.get("ema_alpha", 0.3),
+        max_dt_s=filter_conf.get("max_dt_s", 0.5),
+        max_velocity_ms=filter_conf.get("max_velocity_ms", 15.0),
+        enabled=filter_conf.get("enabled", True)
+    )
     
     # 2. Setup VRPN Client
     client = VRPNClient(
@@ -171,9 +182,10 @@ def main():
             if last_pos_time is not None:
                 dt = current_time - last_pos_time
                 if dt > 0.001:  # Avoid division by zero/extreme values
-                    vn = (north - last_north) / dt
-                    ve = (east - last_east) / dt
-                    vd = (down - last_down) / dt
+                    raw_vn = (north - last_north) / dt
+                    raw_ve = (east - last_east) / dt
+                    raw_vd = (down - last_down) / dt
+                    vn, ve, vd = vel_filter.update(current_time, raw_vn, raw_ve, raw_vd)
             
             # Save tracking states
             last_pos_time = current_time
