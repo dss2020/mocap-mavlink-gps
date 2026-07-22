@@ -68,6 +68,23 @@ def map_axis(mapping_val, pos_x, pos_y, pos_z):
     else:
         raise ValueError(f"Invalid coordinate mapping axis: {mapping_val}")
 
+def utc_to_gps_time(utc_timestamp):
+    """
+    Converts a UTC Unix timestamp (seconds since 1970-01-01 00:00:00 UTC) 
+    to GPS week number and GPS time of week in milliseconds (TOW ms).
+    
+    GPS epoch started on 1980-01-06 00:00:00 UTC.
+    GPS time is continuous (no leap seconds), currently 18 seconds ahead of UTC.
+    """
+    GPS_EPOCH_OFFSET = 315964800  # Seconds between 1970-01-01 and 1980-01-06 UTC
+    LEAP_SECONDS = 18             # GPS time - UTC time offset in seconds
+    SEC_PER_WEEK = 604800
+
+    gps_sec = utc_timestamp - GPS_EPOCH_OFFSET + LEAP_SECONDS
+    time_week = int(gps_sec // SEC_PER_WEEK)
+    time_week_ms = int((gps_sec % SEC_PER_WEEK) * 1000)
+    return time_week, time_week_ms
+
 def main():
     config = load_config()
     
@@ -75,8 +92,12 @@ def main():
     vrpn_conf = config.get("vrpn", {})
     mav_conf = config.get("mavlink", {})
     gps_conf = config.get("gps", {})
+    mocap_conf = config.get("mocap", {})
     axis_conf = config.get("coordinate_mapping", {})
     filter_conf = config.get("velocity_filter", {})
+    
+    # Message type selection: "ATT_POS_MOCAP", "GPS_INPUT", or "BOTH"
+    message_type = mav_conf.get("message_type", "BOTH").upper()
     
     # Setup Velocity Filter
     vel_filter = VelocityFilter(
@@ -136,22 +157,28 @@ def main():
         logger.critical(f"Failed to create MAVLink connection: {e}")
         sys.exit(1)
         
-    # 4. GPS Origin Config
+    # 4. GPS & MOCAP Config
     origin_lat = gps_conf.get("origin_lat", 1.342859)
     origin_lon = gps_conf.get("origin_lon", 103.966484)
     origin_alt = gps_conf.get("origin_alt", 10.0)
-    update_rate_hz = gps_conf.get("update_rate_hz", 10)
-    send_interval = 1.0 / update_rate_hz
     
+    gps_rate = gps_conf.get("update_rate_hz", 10)
+    mocap_rate = mocap_conf.get("update_rate_hz", 20)
+    
+    gps_interval = 1.0 / gps_rate if gps_rate > 0 else 0.1
+    mocap_interval = 1.0 / mocap_rate if mocap_rate > 0 else 0.05
+    
+    logger.info(f"MAVLink Message Type: {message_type}")
     logger.info(f"GPS Origin: Lat {origin_lat}, Lon {origin_lon}, Alt {origin_alt} m")
-    logger.info(f"Target Update Rate: {update_rate_hz} Hz")
+    logger.info(f"Target Update Rates -> GPS: {gps_rate} Hz, MOCAP: {mocap_rate} Hz")
     
-    # 5. Tracking Variables for Velocity Derivatives
+    # 5. Tracking Variables for Velocity Derivatives and Transmission Timing
     last_pos_time = None
     last_north = 0.0
     last_east = 0.0
     last_down = 0.0
-    last_sent_time = 0.0
+    last_gps_sent_time = 0.0
+    last_mocap_sent_time = 0.0
     
     logger.info("Bridge initialized. Waiting for VRPN updates...")
     
@@ -160,6 +187,7 @@ def main():
         try:
             current_time = report["time"]
             pos_x, pos_y, pos_z = report["position"]
+            orient = report.get("orientation", (0.0, 0.0, 0.0, 1.0))
             
             # Map raw coordinate axes to East, North, Up
             east = map_axis(axis_conf.get("east", "x"), pos_x, pos_y, pos_z)
@@ -168,13 +196,9 @@ def main():
             down = -up
             
             # Compute Geodetic coordinates (Flat-Earth WGS84 projection)
-            # Latitude: 1 degree approx 111,111 meters
             lat_deg = origin_lat + (north / 111111.0)
-            
-            # Longitude: depends on latitude
             rad_lat = math.radians(origin_lat)
             lon_deg = origin_lon + (east / (111111.0 * math.cos(rad_lat)))
-            
             alt_m = origin_alt + up
             
             # Compute velocities (North, East, Down) from numerical derivative
@@ -193,42 +217,60 @@ def main():
             last_east = east
             last_down = down
             
-            # Rate-limit transmission to the configured update rate
             now = time.time()
-            if now - last_sent_time >= send_interval:
-                # Pack and send GPS_INPUT (ID 232)
-                # lat/lon must be degrees * 1e7
-                # alt is meters
-                # velocities are meters/sec
-                # hdop/vdop are 1.0 (perfect dilution of precision)
-                # fix_type is 3 (3D fix)
-                # satellites_visible is 15 (stable lock simulation)
-                master.mav.gps_input_send(
-                    int(current_time * 1e6), # time_usec (microseconds)
-                    0,                       # gps_id (GPS instance ID)
-                    0,                       # ignore_flags (0 = use all fields)
-                    0,                       # time_week_ms (0 if unknown)
-                    0,                       # time_week (0 if unknown)
-                    3,                       # fix_type (3D fix)
-                    int(lat_deg * 1e7),      # lat (degrees * 1e7)
-                    int(lon_deg * 1e7),      # lon (degrees * 1e7)
-                    alt_m,                   # alt (meters)
-                    1.0,                     # hdop
-                    1.0,                     # vdop
-                    vn,                      # vn (velocity North, m/s)
-                    ve,                      # ve (velocity East, m/s)
-                    vd,                      # vd (velocity Down, m/s)
-                    0.1,                     # speed_accuracy (m/s)
-                    0.1,                     # horiz_accuracy (m)
-                    0.1,                     # vert_accuracy (m)
-                    15                       # satellites_visible
-                )
-                
-                last_sent_time = now
-                logger.info(
-                    f"Sent GPS_INPUT: Lat={lat_deg:.7f}, Lon={lon_deg:.7f}, Alt={alt_m:.2f}m | "
-                    f"VelNED=({vn:.2f}, {ve:.2f}, {vd:.2f}) m/s"
-                )
+            # Use VRPN report timestamp if valid Unix UTC timestamp (>= 1e9), otherwise fallback to host system UTC time
+            utc_time = current_time if current_time >= 1e9 else now
+            time_usec = int(utc_time * 1e6)
+            
+            # 1. ATT_POS_MOCAP Transmission (Raw unfiltered mocap data)
+            if message_type in ["ATT_POS_MOCAP", "MOCAP", "BOTH"]:
+                if now - last_mocap_sent_time >= mocap_interval:
+                    # Convert VRPN quaternion (qx, qy, qz, qw) to MAVLink standard [qw, qx, qy, qz]
+                    qx, qy, qz, qw = orient
+                    q_mav = [qw, qx, qy, qz]
+                    
+                    master.mav.att_pos_mocap_send(
+                        time_usec,  # time_usec
+                        q_mav,      # q [qw, qx, qy, qz]
+                        north,      # x position (meters, North)
+                        east,       # y position (meters, East)
+                        down        # z position (meters, Down)
+                    )
+                    last_mocap_sent_time = now
+                    logger.info(
+                        f"Sent ATT_POS_MOCAP: PosNED=({north:.2f}, {east:.2f}, {down:.2f}) m | "
+                        f"Quat=[{qw:.3f}, {qx:.3f}, {qy:.3f}, {qz:.3f}]"
+                    )
+            
+            # 2. GPS_INPUT Transmission
+            if message_type in ["GPS_INPUT", "GPS", "BOTH"]:
+                if now - last_gps_sent_time >= gps_interval:
+                    time_week, time_week_ms = utc_to_gps_time(utc_time)
+                    master.mav.gps_input_send(
+                        time_usec,               # time_usec
+                        0,                       # gps_id
+                        0,                       # ignore_flags
+                        time_week_ms,            # time_week_ms
+                        time_week,               # time_week
+                        3,                       # fix_type
+                        int(lat_deg * 1e7),      # lat
+                        int(lon_deg * 1e7),      # lon
+                        alt_m,                   # alt
+                        1.0,                     # hdop
+                        1.0,                     # vdop
+                        vn,                      # vn
+                        ve,                      # ve
+                        vd,                      # vd
+                        0.1,                     # speed_accuracy
+                        0.1,                     # horiz_accuracy
+                        0.1,                     # vert_accuracy
+                        15                       # satellites_visible
+                    )
+                    last_gps_sent_time = now
+                    logger.info(
+                        f"Sent GPS_INPUT: Lat={lat_deg:.7f}, Lon={lon_deg:.7f}, Alt={alt_m:.2f}m | "
+                        f"VelNED=({vn:.2f}, {ve:.2f}, {vd:.2f}) m/s"
+                    )
                 
         except Exception as e:
             logger.error(f"Error processing tracker report: {e}")

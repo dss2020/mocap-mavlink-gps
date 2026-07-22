@@ -1,21 +1,25 @@
 {
   "vrpn": {
-    "host": "127.0.0.1",
+    "host": "192.168.1.100",
     "port": 3883,
-    "tracker_name": "Rigidbody"
+    "tracker_name": "ndpmonoco"
   },
   "mavlink": {
     "connection_type": "serial",
     "port": "auto",
     "baudrate": 115200,
     "system_id": 1,
-    "component_id": 220
+    "component_id": 220,
+    "message_type": "BOTH"
   },
   "gps": {
     "origin_lat": 1.341575,
     "origin_lon": 103.964866,
     "origin_alt": 10.0,
     "update_rate_hz": 10
+  },
+  "mocap": {
+    "update_rate_hz": 20
   },
   "coordinate_mapping": {
     "east": "-x",
