@@ -1,10 +1,25 @@
 import unittest
 import math
-from gps_bridge import map_axis
+from gps_bridge import map_axis, utc_to_gps_time
 from simulate_vrpn_server import map_local_to_vrpn
 from velocity_filter import VelocityFilter
 
 class TestGPSBridge(unittest.TestCase):
+    def test_utc_to_gps_time(self):
+        # Test UTC timestamp conversion to GPS week and TOW ms
+        # 1700000000 UTC corresponds to 2023-11-14 22:13:20 UTC
+        utc_ts = 1700000000.0
+        week, tow_ms = utc_to_gps_time(utc_ts)
+        
+        # GPS epoch (1980-01-06) offset = 315964800, leap seconds = 18
+        gps_sec = 1700000000.0 - 315964800 + 18 # 1384035218.0
+        expected_week = int(gps_sec // 604800) # 2288
+        expected_tow_ms = int((gps_sec % 604800) * 1000) # 171218000
+        
+        self.assertEqual(week, expected_week)
+        self.assertEqual(tow_ms, expected_tow_ms)
+        self.assertGreater(week, 2000) # Valid modern GPS week
+
     def test_coordinate_mapping(self):
         # Coordinates: x=1.0, y=2.0, z=3.0
         # Check mapping of positive and negative axes
@@ -116,6 +131,28 @@ class TestGPSBridge(unittest.TestCase):
         self.assertAlmostEqual(vn, 10.0)
         self.assertAlmostEqual(ve, 0.0)
         self.assertAlmostEqual(vd, 0.0)
+
+    def test_quaternion_reordering(self):
+        # VRPN outputs (qx, qy, qz, qw)
+        vrpn_orient = (0.1, 0.2, 0.3, 0.9)
+        qx, qy, qz, qw = vrpn_orient
+        # MAVLink requires [qw, qx, qy, qz]
+        q_mav = [qw, qx, qy, qz]
+        self.assertEqual(q_mav, [0.9, 0.1, 0.2, 0.3])
+
+    def test_mocap_ned_mapping(self):
+        # Raw VRPN coordinates
+        pos_x, pos_y, pos_z = 5.0, 2.0, -3.0
+        # Axis config: east="x", north="-z", up="y"
+        east = map_axis("x", pos_x, pos_y, pos_z)
+        north = map_axis("-z", pos_x, pos_y, pos_z)
+        up = map_axis("y", pos_x, pos_y, pos_z)
+        down = -up
+
+        self.assertEqual(east, 5.0)
+        self.assertEqual(north, 3.0)
+        self.assertEqual(up, 2.0)
+        self.assertEqual(down, -2.0)
 
 if __name__ == "__main__":
     unittest.main()
