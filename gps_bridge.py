@@ -7,6 +7,7 @@ from pymavlink import mavutil
 import serial.tools.list_ports
 from vrpn_client import VRPNClient
 from velocity_filter import VelocityFilter
+from gps_noise import GPSNoiseGenerator
 
 # Configure Logging
 logging.basicConfig(
@@ -95,6 +96,7 @@ def main():
     mocap_conf = config.get("mocap", {})
     axis_conf = config.get("coordinate_mapping", {})
     filter_conf = config.get("velocity_filter", {})
+    noise_conf = config.get("gps_noise", {})
     
     # Message type selection: "ATT_POS_MOCAP", "GPS_INPUT", or "BOTH"
     message_type = mav_conf.get("message_type", "BOTH").upper()
@@ -107,6 +109,9 @@ def main():
         max_velocity_ms=filter_conf.get("max_velocity_ms", 15.0),
         enabled=filter_conf.get("enabled", True)
     )
+
+    # Setup GPS Noise Generator
+    gps_noise_gen = GPSNoiseGenerator.from_dict(noise_conf)
     
     # 2. Setup VRPN Client
     client = VRPNClient(
@@ -245,6 +250,17 @@ def main():
             # 2. GPS_INPUT Transmission
             if message_type in ["GPS_INPUT", "GPS", "BOTH"]:
                 if now - last_gps_sent_time >= gps_interval:
+                    # Apply GPS noise to position and velocity
+                    noisy_n, noisy_e, noisy_d = gps_noise_gen.apply_position_noise(current_time, north, east, down)
+                    noisy_up = -noisy_d
+
+                    lat_deg = origin_lat + (noisy_n / 111111.0)
+                    rad_lat = math.radians(origin_lat)
+                    lon_deg = origin_lon + (noisy_e / (111111.0 * math.cos(rad_lat)))
+                    alt_m = origin_alt + noisy_up
+
+                    noisy_vn, noisy_ve, noisy_vd = gps_noise_gen.apply_velocity_noise(current_time, vn, ve, vd)
+
                     time_week, time_week_ms = utc_to_gps_time(utc_time)
                     master.mav.gps_input_send(
                         time_usec,               # time_usec
@@ -258,9 +274,9 @@ def main():
                         alt_m,                   # alt
                         1.0,                     # hdop
                         1.0,                     # vdop
-                        vn,                      # vn
-                        ve,                      # ve
-                        vd,                      # vd
+                        noisy_vn,                # vn
+                        noisy_ve,                # ve
+                        noisy_vd,                # vd
                         0.1,                     # speed_accuracy
                         0.1,                     # horiz_accuracy
                         0.1,                     # vert_accuracy
@@ -269,7 +285,7 @@ def main():
                     last_gps_sent_time = now
                     logger.info(
                         f"Sent GPS_INPUT: Lat={lat_deg:.7f}, Lon={lon_deg:.7f}, Alt={alt_m:.2f}m | "
-                        f"VelNED=({vn:.2f}, {ve:.2f}, {vd:.2f}) m/s"
+                        f"VelNED=({noisy_vn:.2f}, {noisy_ve:.2f}, {noisy_vd:.2f}) m/s"
                     )
                 
         except Exception as e:

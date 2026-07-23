@@ -3,6 +3,7 @@ import math
 from gps_bridge import map_axis, utc_to_gps_time
 from simulate_vrpn_server import map_local_to_vrpn
 from velocity_filter import VelocityFilter
+from gps_noise import GPSNoiseGenerator
 
 class TestGPSBridge(unittest.TestCase):
     def test_utc_to_gps_time(self):
@@ -153,6 +154,62 @@ class TestGPSBridge(unittest.TestCase):
         self.assertEqual(north, 3.0)
         self.assertEqual(up, 2.0)
         self.assertEqual(down, -2.0)
+
+    def test_gps_noise_disabled(self):
+        gen = GPSNoiseGenerator(enabled=False)
+        n, e, d = gen.apply_position_noise(0.0, 10.0, 20.0, -5.0)
+        vn, ve, vd = gen.apply_velocity_noise(0.0, 1.0, 2.0, 0.5)
+        self.assertEqual((n, e, d), (10.0, 20.0, -5.0))
+        self.assertEqual((vn, ve, vd), (1.0, 2.0, 0.5))
+
+    def test_gps_noise_independent_horiz_vert(self):
+        # Configure zero vertical noise for position, non-zero for horizontal
+        gen = GPSNoiseGenerator(
+            enabled=True,
+            pos_horiz_white_std=1.0,
+            pos_horiz_walk_std=0.5,
+            pos_vert_white_std=0.0,
+            pos_vert_walk_std=0.0,
+            vel_horiz_white_std=0.0,
+            vel_horiz_walk_std=0.0,
+            vel_vert_white_std=0.5,
+            vel_vert_walk_std=0.2,
+            seed=42
+        )
+        
+        # Position test: Vertical (down) must remain exactly equal to input
+        n, e, d = gen.apply_position_noise(0.1, 0.0, 0.0, 10.0)
+        self.assertNotEqual((n, e), (0.0, 0.0))
+        self.assertEqual(d, 10.0)
+
+        # Velocity test: Horizontal (vn, ve) must remain exactly equal to input, vertical (vd) must differ
+        vn, ve, vd = gen.apply_velocity_noise(0.1, 1.0, 1.0, 2.0)
+        self.assertEqual((vn, ve), (1.0, 1.0))
+        self.assertNotEqual(vd, 2.0)
+
+    def test_gps_noise_from_dict(self):
+        cfg = {
+            "enabled": True,
+            "tau_s": 60.0,
+            "position": {
+                "horizontal_white_std_m": 0.3,
+                "horizontal_walk_std_m": 0.1,
+                "vertical_white_std_m": 0.8,
+                "vertical_walk_std_m": 0.2
+            },
+            "velocity": {
+                "horizontal_white_std_ms": 0.04,
+                "horizontal_walk_std_ms": 0.01,
+                "vertical_white_std_ms": 0.09,
+                "vertical_walk_std_ms": 0.03
+            },
+            "seed": 123
+        }
+        gen = GPSNoiseGenerator.from_dict(cfg)
+        self.assertTrue(gen.enabled)
+        self.assertEqual(gen.tau_s, 60.0)
+        self.assertEqual(gen.pos_horiz_white_std, 0.3)
+        self.assertEqual(gen.vel_vert_walk_std, 0.03)
 
 if __name__ == "__main__":
     unittest.main()
