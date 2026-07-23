@@ -34,7 +34,7 @@
     "max_velocity_ms": 15.0
   },
   "gps_noise": {
-    "enabled": true,
+    "enabled": false,
     "tau_s": 30.0,
     "position": {
       "horizontal_white_std_m": 0.5,
