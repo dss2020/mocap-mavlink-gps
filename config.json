@@ -19,7 +19,7 @@
     "update_rate_hz": 10
   },
   "mocap": {
-    "update_rate_hz": 20
+    "update_rate_hz": 100
   },
   "coordinate_mapping": {
     "east": "-x",
